@@ -14,11 +14,9 @@ def readWriteToCloudStorage(input_blob_name, bucket_name, storage_client, date):
     bucket = storage_client.bucket(bucket_name)
     input_blob = bucket.blob(input_blob_name)
 
-    # reda from input
+    # read from input
     with input_blob.open("r") as f:
         rawStr = f.read()
-
-    input_blob_name.split('.')[0]
 
     df = pd.read_csv(StringIO(rawStr))
     df['date'] = df['date'].apply(lambda x: datetime.strptime(x, r'%d-%m-%Y'))
@@ -35,6 +33,7 @@ def readWriteToCloudStorage(input_blob_name, bucket_name, storage_client, date):
         rawStr = f.read()
     df_check = pd.read_csv(StringIO(rawStr))
     df_check.head()
+
 
 date = '2022-03-31'
 readWriteToCloudStorage('economy.csv', bucket_name, storage_client, date)
