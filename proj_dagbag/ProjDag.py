@@ -57,17 +57,17 @@ with DAG(
             date='2022-03-30'
             # should be running the dag every day starting from the first day in the data
             # date = pendulum.today() - pd.Timedelta(days=356)
-            output_blob_name = 'daily/' + input_blob_name.split('.')[0] + '_' + str(date) + '.csv'
+            output_blob_name = 'daily/' + input_blob_name.split('.')[0] + '_' + str(date.replace('-','_')) + '.csv'
             output_blob = bucket.blob(output_blob_name)
             filtdate = df[df['date']==date]
-            output_blob.upload_from_string(filtdate.to_csv(), 'text/csv')
+            output_blob.upload_from_string(filtdate.to_csv(index=False), 'text/csv')
             
         # ti.xcom_push()
 
     def loadToBigQuery(**kwargs):
         print('loading to big query')
         # hard code for now
-        input_filenames = ['economy.csv', 'business.csv']
+        input_filenames = ['daily/economy_2022_03_30.csv', 'daily/business_2022_03_30.csv']
         destination_table_names = ['economy_raw', 'business_raw']
         for input_filename, destination_table_name in zip(input_filenames, destination_table_names):
         # input_filename = 'economy.csv'
@@ -100,6 +100,8 @@ with DAG(
         # use En Qi's code in airline_clean.py to 
         # combine the business and economy tables into 1
         # and process the columns appropriately
+        
+
 
 
     initCredentials_task = PythonOperator(
