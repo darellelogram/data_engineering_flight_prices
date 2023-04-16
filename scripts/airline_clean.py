@@ -2,16 +2,16 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import re
-#eco = pd.read_csv("economy.csv")
-biz = pd.read_excel("business.xlsx", sheet_name="business")
-eco = pd.read_excel("business.xlsx",sheet_name="economy")
-coord = pd.read_csv("india_city.csv")
+biz = pd.read_csv("data/business.csv")
+eco = pd.read_csv("data/economy.csv")
+coord = pd.read_csv("data/india_cities.csv")
 
 biz["class"] = "business"
 eco["class"] = "economic"
 
 combi = eco.append(biz)
 #date['inputDate'] = pd.to_datetime(date['inputDate'])
+combi["date"] = pd.to_datetime(combi["date"],"d-m-Y")
 combi["dept_day"] = combi["date"].dt.day_name()
 
 combi.rename({"dep_time": "departure_time", "from": "source_city", 
@@ -32,10 +32,6 @@ temp["minute"] = np.where(temp["minute"] == "", 0, temp["minute"])
 temp["minute"] = temp["minute"].astype(int) #converting data type
 
 combi["duration_new"] = np.around((temp["hour"] + (temp["minute"]/60)),2)
-
-#combi["stopover_boo"] = True
-#print(combi.columns.values.tolist())
-#combi.loc[combi["stops"] == "non-stop", "stopover_boo"] = False
 
 combi["stops"] = combi["stops"].apply(lambda r: re.sub("[^0-9]","",r)) # taking only digits
 combi["stops"] = np.where(combi["stops"] == "", 0, combi["stops"]) # replacign "" with 0
