@@ -43,9 +43,9 @@ with DAG(
         ti = kwargs["ti"]
 
         ## try using Variables to cache json key
-        # credentials = service_account.Credentials.from_service_account_file('../scripts/bigquery-key.json')
-        # credentials = Variable.set("credentials", service_account.Credentials.from_service_account_file('../scripts/bigquery-key.json'))
-        with open('../scripts/bigquery-key.json', 'r') as f:
+        # credentials = service_account.Credentials.from_service_account_file('scripts/bigquery-key.json')
+        # credentials = Variable.set("credentials", service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
+        with open('scripts/bigquery-key.json', 'r') as f:
             credentials_obj = json.load(f)
         Variable.set("credentials", credentials_obj)
         bucket_name = 'flight-prices'
@@ -62,27 +62,29 @@ with DAG(
         
         ## try getting credentials json from Variable
         # credentials_obj = Variable.get("credentials")
-        # with open('../scripts/bigquery-key.json', 'r') as f:
+        # with open('scripts/bigquery-key.json', 'r') as f:
         #     credentials_obj = json.load(f)
         # credentials = service_account.Credentials.from_service_account_info(credentials_obj)
         # credentials = service_account.Credentials.from_service_account_info(Variable.get("credentials"))
         
-        bucket_name = ti.xcom_pull(task_ids="initCredentials", key="bucket_name")
-        credentials = service_account.Credentials.from_service_account_file('../scripts/bigquery-key.json')
+        # bucket_name = ti.xcom_pull(task_ids="initCredentials", key="bucket_name")
+        bucket_name = 'flight-prices'
+        credentials = service_account.Credentials.from_service_account_file('scripts/bigquery-key.json')
         storage_client = storage.Client(credentials=credentials)
         bucket = storage_client.bucket(bucket_name)
         
-        input_blob_names = ['economy.csv', 'business.csv']
+        input_blob_names = ['economy_days_labelled.csv', 'business_days_labelled.csv']
 
         for input_blob_name in input_blob_names:
             input_blob = bucket.blob(input_blob_name)
             with input_blob.open("r") as f:
                 rawStr = f.read()
             df = pd.read_csv(StringIO(rawStr))
-            df['date'] = df['date'].apply(lambda x: datetime.strptime(x, r'%d-%m-%Y'))
+            # df['date'] = df['date'].apply(lambda x: datetime.strptime(x, r'%d-%m-%Y'))
             
             # hard code the date for now
-            date='2022-03-30'
+            # date='2022-03-29'
+            date = pendulum.today().strftime('%Y-%m-%d')
             # should be running the dag every day starting from the first day in the data
             # date = pendulum.today() - pd.Timedelta(days=<numberOfDaysSinceFirstDayInData>)
             
@@ -95,17 +97,18 @@ with DAG(
 
     def loadRawToBigQuery(**kwargs):
         print('loading to big query')
-        bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('../scripts/bigquery-key.json'))
+        bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
         Variable.set("bq_client", bq_client)
 
         # hard filenames code for now
         # 2022-02-01 to 2022-03-31
         # 2023-04-06 -> 2022-02-01
         # 2023-04-07 -> 2022-02-02
-        input_blob_names = ['economy.csv', 'business.csv']
+        input_blob_names = ['economy_days_labelled.csv', 'business_days_labelled.csv']
         # date = pendulum.today()
         # print("today is " + str(date))
-        date = '2022-03-30'
+        # date = '2022-03-30'
+        date = pendulum.today().strftime('%Y-%m-%d')
         input_filenames = []
         for input_blob_name in input_blob_names:
             input_filename = 'daily/' + input_blob_name.split('.')[0] + '_' + str(date) + '.csv'
@@ -143,10 +146,10 @@ with DAG(
 
         # pull from BigQuery
         # bq_client = Variable.get("bq_client")
-        bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('../scripts/bigquery-key.json'))
+        bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
         # date = '2022-03-30'
 
-        econ_query = """SELECT * FROM is3107-flightprice-23.flight_prices.economy_raw LIMIT 5"""
+        econ_query = """SELECT * FROM is3107-flightprice-23.flight_prices.economy_raw"""
         econ = bq_client.query(econ_query).to_dataframe()
 
         # DEBUGGING
@@ -155,7 +158,7 @@ with DAG(
         print('econ is')
         print(econ)
 
-        biz_query = """SELECT * FROM is3107-flightprice-23.flight_prices.business_raw LIMIT 5"""
+        biz_query = """SELECT * FROM is3107-flightprice-23.flight_prices.business_raw"""
         biz = bq_client.query(biz_query).to_dataframe()
         print('biz.shape is ' + str(biz.shape))
         print('biz.columns is ' + str(biz.columns))
@@ -238,7 +241,7 @@ with DAG(
         combi.rename({"latitude": "destination_latitude", "longitude": "destination_longitude"}, axis = 1, inplace = True)
 
         combi.drop(columns=["city_x", "country_x","city_y","country_y"], inplace=True)
-        
+
         # DEBUGGING
         print('after transformation, combi.columns is ' + str(combi.columns))
         print('combi.shape is ' + str(combi.shape))
