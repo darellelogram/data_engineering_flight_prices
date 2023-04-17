@@ -31,43 +31,19 @@ import db_dtypes
 # or perhaps even caching in local storage
 
 with DAG(
-    "ProjDag",
+    dag_id="ProjDag",
     default_args={"retries":2},
     description="DAG for IS3107 project",
-    start_date=pendulum.datetime(2023,3,23, tz="UTC"),
+    start_date=pendulum.datetime(2017,1,1,tz="UTC"),
+    schedule_interval="@daily",
     catchup=False,
     tags=["example"],
 ) as dag:
     dag.doc_md = __doc__
-    def initCredentials(**kwargs):
-        ti = kwargs["ti"]
-
-        ## try using Variables to cache json key
-        # credentials = service_account.Credentials.from_service_account_file('scripts/bigquery-key.json')
-        # credentials = Variable.set("credentials", service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
-        with open('scripts/bigquery-key.json', 'r') as f:
-            credentials_obj = json.load(f)
-        Variable.set("credentials", credentials_obj)
-        bucket_name = 'flight-prices'
-
-        ## try using ti.xcom_push to pass credentials object to next fn
-        # ti.xcom_push("credentials", credentials)
-        ti.xcom_push("bucket_name", bucket_name)
 
     # simulates ingestion
     def readBulkWriteDaily(**kwargs):
         ti = kwargs["ti"]
-        ## try using ti.xcom_pull to receive credentials object from prev fn
-        # credentials = ti.xcom_pull(task_ids="initCredentials", key="credentials")
-        
-        ## try getting credentials json from Variable
-        # credentials_obj = Variable.get("credentials")
-        # with open('scripts/bigquery-key.json', 'r') as f:
-        #     credentials_obj = json.load(f)
-        # credentials = service_account.Credentials.from_service_account_info(credentials_obj)
-        # credentials = service_account.Credentials.from_service_account_info(Variable.get("credentials"))
-        
-        # bucket_name = ti.xcom_pull(task_ids="initCredentials", key="bucket_name")
         bucket_name = 'flight-prices'
         credentials = service_account.Credentials.from_service_account_file('scripts/bigquery-key.json')
         storage_client = storage.Client(credentials=credentials)
@@ -80,13 +56,8 @@ with DAG(
             with input_blob.open("r") as f:
                 rawStr = f.read()
             df = pd.read_csv(StringIO(rawStr))
-            # df['date'] = df['date'].apply(lambda x: datetime.strptime(x, r'%d-%m-%Y'))
             
-            # hard code the date for now
-            # date='2022-03-29'
             date = pendulum.today().strftime('%Y-%m-%d')
-            # should be running the dag every day starting from the first day in the data
-            # date = pendulum.today() - pd.Timedelta(days=<numberOfDaysSinceFirstDayInData>)
             
             # daily files will already have 
             output_blob_name = 'daily/' + input_blob_name.split('.')[0] + '_' + str(date) + '.csv'
@@ -98,16 +69,8 @@ with DAG(
     def loadRawToBigQuery(**kwargs):
         print('loading to big query')
         bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
-        Variable.set("bq_client", bq_client)
 
-        # hard filenames code for now
-        # 2022-02-01 to 2022-03-31
-        # 2023-04-06 -> 2022-02-01
-        # 2023-04-07 -> 2022-02-02
         input_blob_names = ['economy_days_labelled.csv', 'business_days_labelled.csv']
-        # date = pendulum.today()
-        # print("today is " + str(date))
-        # date = '2022-03-30'
         date = pendulum.today().strftime('%Y-%m-%d')
         input_filenames = []
         for input_blob_name in input_blob_names:
@@ -145,9 +108,7 @@ with DAG(
         ti = kwargs["ti"]
 
         # pull from BigQuery
-        # bq_client = Variable.get("bq_client")
         bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
-        # date = '2022-03-30'
 
         econ_query = """SELECT * FROM is3107-flightprice-23.flight_prices.economy_raw"""
         econ = bq_client.query(econ_query).to_dataframe()
@@ -248,7 +209,6 @@ with DAG(
         print('combi.shape')
         print([str(col) + str(type(x)) for x, col in zip(list(combi.iloc[0]), combi.columns)])
 
-
         table_id = "is3107-flightprice-23.flight_prices.final"
         
         table = bq_client.get_table(table_id)
@@ -288,11 +248,6 @@ with DAG(
         table = bq_client.get_table(table_id)
         print("Ending with {} rows".format(table.num_rows))
 
-    initCredentials_task = PythonOperator(
-        task_id="initCredentials",
-        python_callable=initCredentials,
-    )
-
     readBulkWriteDaily_task = PythonOperator(
         task_id="readBulkWriteDaily",
         python_callable=readBulkWriteDaily,
@@ -308,4 +263,4 @@ with DAG(
         python_callable=combineAndClean,
     )
 
-    initCredentials_task >> readBulkWriteDaily_task >> loadRawToBigQuery_task >> combineAndClean_task
+    readBulkWriteDaily_task >> loadRawToBigQuery_task >> combineAndClean_task
