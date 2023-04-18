@@ -1,4 +1,3 @@
-import json
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import pendulum
@@ -12,7 +11,6 @@ from google.oauth2 import service_account
 from airflow.models import Variable
 import numpy as np
 import re
-import db_dtypes
 
 #TODO: modularize code further - put initialisation of credentials, 
 # Storage Clients and BigQuery clients into separate functions
@@ -89,7 +87,8 @@ with DAG(
                 skip_leading_rows=1,
                 source_format=bigquery.SourceFormat.CSV,
                 allow_quoted_newlines=True,
-                ignore_unknown_values=True
+                ignore_unknown_values=True,
+                write_disposition="WRITE_TRUNCATE",
             )
 
             load_job = bq_client.load_table_from_uri(
@@ -99,10 +98,8 @@ with DAG(
             destination_table = bq_client.get_table(table_id)
             print("Ending with {} rows.".format(destination_table.num_rows))
 
-    
     def combineAndClean(**kwargs):
         print('combine and clean in BigQuery')
-        # use En Qi's code in airline_clean.py to 
         # combine the business and economy tables into 1
         # and process the columns appropriately
         ti = kwargs["ti"]
@@ -136,7 +133,6 @@ with DAG(
         # DEBUGGING
         print('combi.shape is ' + str(combi.shape))
         print('combi.columns is ' + str(combi.columns))
-        combi["dept_day"] = pd.to_datetime(combi["date"], format='%Y-%m-%d', errors='coerce').dt.day_name()
         combi["num_code"] = combi["num_code"].astype(int)
 
         combi.rename({"dep_time": "departure_time", "from": "source_city", 
@@ -146,7 +142,6 @@ with DAG(
 
 
         dd = pd.DataFrame(combi["date"].astype(str).str.split("-",expand = True).to_numpy().astype(int),columns = ["year","month","day"])
-        combi["days_left"] = np.where(dd["month"] > 2, dd["day"] +18, np.where(dd["month"] == 2, dd["day"] -10, dd["day"]))
 
         temp = pd.DataFrame(combi["duration"].str.split(expand = True).to_numpy().astype(str), 
                             columns = ["hour","minute"])
@@ -201,12 +196,14 @@ with DAG(
         combi = pd.merge(combi, coord, left_on="destination_city", right_on="city", how="left")
         combi.rename({"latitude": "destination_latitude", "longitude": "destination_longitude"}, axis = 1, inplace = True)
 
-        combi.drop(columns=["city_x", "country_x","city_y","country_y"], inplace=True)
+        combi.drop(columns=["city_x", "country_x", "city_y","country_y"], inplace=True)
 
         # DEBUGGING
         print('after transformation, combi.columns is ' + str(combi.columns))
         print('combi.shape is ' + str(combi.shape))
-        print('combi.shape')
+        print('combi.head()')
+        print(combi.head())
+        combi.to_csv('combi_test.csv', index=False)
         print([str(col) + str(type(x)) for x, col in zip(list(combi.iloc[0]), combi.columns)])
 
         table_id = "is3107-flightprice-23.flight_prices.final"

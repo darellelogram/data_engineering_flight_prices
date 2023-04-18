@@ -1,4 +1,3 @@
-import json
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import pendulum
@@ -7,22 +6,50 @@ from google.cloud import storage
 import pandas as pd
 from io import StringIO
 from datetime import datetime
-from google.cloud import bigquery
 from google.oauth2 import service_account
-from airflow.models import Variable
-import numpy as np
-import re
-import db_dtypes
+from google.cloud import bigquery
 
 with DAG(
-    "StartProjDag",
+    dag_id="StartProjDag",
     default_args={"retries":2},
     description="DAG to kickstart data flow for IS3107 project",
-    start_date=pendulum.datetime(2023,4,16, tz="UTC"),
+    start_date=pendulum.datetime(2017,1,1,tz="UTC"),
+    schedule_interval=None,
     catchup=False,
+    tags=["example"],
 ) as dag:
     dag.doc_md = __doc__
-    
+
+    def clearPrevRunCSVData(**kwargs):
+        ti = kwargs["ti"]
+        storage_client = storage.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
+        blobs = storage_client.list_blobs('flight-prices', prefix='daily', delimiter='/')
+        for blob in blobs:
+            print(f'Deleting file {blob.name}')
+            blob.delete()
+
+    def clearPrevRunBQData(**kwargs):
+        ti = kwargs["ti"]
+        for table_name in ['business_raw', 'economy_raw', 'final']:
+            bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'))
+            table_id = "is3107-flightprice-23.flight_prices." + table_name
+
+            destination_table = bq_client.get_table(table_id)  # Make an API request.
+            print("deleting from " + table_id)
+            print("Starting with {} rows.".format(destination_table.num_rows))
+            
+            delete_query = "DELETE FROM " + table_id + " WHERE true"
+
+            delete_job = bq_client.query(delete_query)
+            delete_job.result()
+
+            # check if all rows deleted
+            check_query= "SELECT COUNT(*) FROM " + table_id + " WHERE true"
+            check_job = bq_client.query(check_query) 
+            check_results = check_job.result()
+            for row in check_results:
+                print('Ending with ' + str(row[0]) + ' rows.')
+
     def labelDays(**kwargs):
         ti = kwargs["ti"]
         # read in data (economy.csv, business.csv) from GCP bucket
@@ -39,6 +66,11 @@ with DAG(
                 rawStr = f.read()
             df = pd.read_csv(StringIO(rawStr))
             df['date'] = df['date'].apply(lambda x: datetime.strptime(x, r'%d-%m-%Y'))
+            
+            # days between day of scraping and day of flight
+            df['days_left'] = (df['date'] - datetime.strptime('2022-02-10', r'%Y-%m-%d')).apply(lambda x: x.days)
+            # Day of Week of the flight
+            df['dept_day'] = pd.to_datetime(df["date"], format='%Y-%m-%d', errors='coerce').dt.day_name()
 
             # sort by date in the raw data
             unique_dates = sorted(list(df['date'].unique()))
@@ -61,8 +93,20 @@ with DAG(
             output_blob_name = input_blob_name.split('.')[0] + '_days_labelled' + '.csv'
             output_blob = bucket.blob(output_blob_name)
             output_blob.upload_from_string(df.to_csv(index=False), 'text/csv')                
-    
+
+    clearPrevRunCSVData_task = PythonOperator(
+        task_id="clearPrevRunCSVData",
+        python_callable=clearPrevRunCSVData,
+    )
+
+    clearPrevRunBQData_task = PythonOperator(
+        task_id="clearPrevRunBQData",
+        python_callable=clearPrevRunBQData,
+    )
+
     labelDays_task = PythonOperator(
         task_id="labelDays",
         python_callable=labelDays,
     )
+
+    (clearPrevRunCSVData_task, clearPrevRunBQData_task) >> labelDays_task
