@@ -110,12 +110,6 @@ with DAG(
         econ_query = """SELECT * FROM is3107-flightprice-23.flight_prices.economy_raw"""
         econ = bq_client.query(econ_query).to_dataframe()
 
-        # DEBUGGING
-        print('econ.shape is ' + str(econ.shape))
-        print('econ.columns is ' + str(econ.columns))
-        print('econ is')
-        print(econ)
-
         biz_query = """SELECT * FROM is3107-flightprice-23.flight_prices.business_raw"""
         biz = bq_client.query(biz_query).to_dataframe()
         print('biz.shape is ' + str(biz.shape))
@@ -129,11 +123,6 @@ with DAG(
         coord = bq_client.query(coord_query).to_dataframe()
 
         combi = pd.concat([econ, biz])
-
-        # DEBUGGING
-        print('combi.shape is ' + str(combi.shape))
-        print('combi.columns is ' + str(combi.columns))
-        combi["num_code"] = combi["num_code"].astype(int)
 
         combi.rename({"dep_time": "departure_time", "from": "source_city", 
                     "time_taken": "duration", "stop": "stops", "arr_time": "arrival_time",
@@ -198,44 +187,11 @@ with DAG(
 
         combi.drop(columns=["city_x", "country_x", "city_y","country_y"], inplace=True)
 
-        # DEBUGGING
-        print('after transformation, combi.columns is ' + str(combi.columns))
-        print('combi.shape is ' + str(combi.shape))
-        print('combi.head()')
-        print(combi.head())
-        combi.to_csv('combi_test.csv', index=False)
-        print([str(col) + str(type(x)) for x, col in zip(list(combi.iloc[0]), combi.columns)])
-
         table_id = "is3107-flightprice-23.flight_prices.final"
         
         table = bq_client.get_table(table_id)
         print("Loading to {}".format(table_id))
         print("Starting with {} rows".format(table.num_rows))
-
-        load_clean_job_config = bigquery.LoadJobConfig(schema=[
-            bigquery.SchemaField("date", bigquery.enums.SqlTypeNames.DATE),
-            bigquery.SchemaField("airline", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("ch_code", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("num_code", bigquery.enums.SqlTypeNames.INTEGER),
-            bigquery.SchemaField("departure_time", bigquery.enums.SqlTypeNames.TIME),
-            bigquery.SchemaField("source_city", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("duration", bigquery.enums.SqlTypeNames.FLOAT),
-            bigquery.SchemaField("stops", bigquery.enums.SqlTypeNames.INTEGER),
-            bigquery.SchemaField("arrival_time", bigquery.enums.SqlTypeNames.TIME),
-            bigquery.SchemaField("destination_city", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("price", bigquery.enums.SqlTypeNames.INTEGER),
-            bigquery.SchemaField("class", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("dept_day", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("days_left", bigquery.enums.SqlTypeNames.INTEGER),
-            bigquery.SchemaField("duration_category", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("departure_time_bin", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("arrival_time_bin", bigquery.enums.SqlTypeNames.STRING),
-            bigquery.SchemaField("source_latitude", bigquery.enums.SqlTypeNames.FLOAT),
-            bigquery.SchemaField("source_longitude", bigquery.enums.SqlTypeNames.FLOAT),
-            bigquery.SchemaField("destination_latitude", bigquery.enums.SqlTypeNames.FLOAT),
-            bigquery.SchemaField("destination_longitude", bigquery.enums.SqlTypeNames.FLOAT)
-            ]
-        )
 
         load_clean_job = bq_client.load_table_from_dataframe(
             combi, table_id
@@ -244,6 +200,34 @@ with DAG(
 
         table = bq_client.get_table(table_id)
         print("Ending with {} rows".format(table.num_rows))
+
+    def buildMlModel(**kwargs):
+        print("building ML Model")
+        bq_client = bigquery.Client(credentials=service_account.Credentials.from_service_account_file('scripts/bigquery-key.json'), 
+                                    project='is3107-flightprice-23', location='asia-southeast1')
+        # Train a RandomForestRegressor
+        train_query = """
+        CREATE OR REPLACE MODEL is3107-flightprice-23.ml_model.rfr_model
+        OPTIONS(MODEL_TYPE='RANDOM_FOREST_REGRESSOR',
+                MAX_TREE_DEPTH = 20,
+                INPUT_LABEL_COLS = ['price']
+                )
+        AS SELECT 
+        airline,source_city,destination_city,price,class,days_left,duration_category,departure_time_bin,dept_day
+        FROM `is3107-flightprice-23.flight_prices.final`;
+        """
+        bq_client.query(train_query)
+        print("ML Model Built")
+
+        # Model Performance
+        print("Model Performance:")
+        eval_query = """
+        SELECT *
+        FROM ML.EVALUATE(MODEL `is3107-flightprice-23.ml_model.rfr_model`)
+        """
+        evaluation = bq_client.query(eval_query).to_dataframe()
+        print(evaluation)
+        print("End of Model")
 
     readBulkWriteDaily_task = PythonOperator(
         task_id="readBulkWriteDaily",
@@ -260,4 +244,10 @@ with DAG(
         python_callable=combineAndClean,
     )
 
-    readBulkWriteDaily_task >> loadRawToBigQuery_task >> combineAndClean_task
+    buildMlModel_task = PythonOperator(
+        task_id="buildMlModel",
+        python_callable=buildMlModel,
+    )
+
+    # readBulkWriteDaily_task >> loadRawToBigQuery_task >> combineAndClean_task
+    readBulkWriteDaily_task >> loadRawToBigQuery_task >> combineAndClean_task >> buildMlModel_task
